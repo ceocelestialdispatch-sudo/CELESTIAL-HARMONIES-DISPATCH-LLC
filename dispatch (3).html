@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Celestial Harmonies Dispatch Management</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #020510; font-family: 'Rajdhani', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0a1628; }
+  ::-webkit-scrollbar-thumb { background: #1a2e4a; border-radius: 3px; }
+  input, select, textarea, button { font-family: 'Rajdhani', sans-serif; }
+  input::placeholder { color: #3a5270; }
+  select option { background: #0a1628; }
+
+  /* Galaxy background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(ellipse at 20% 30%, rgba(72, 0, 120, 0.35) 0%, transparent 55%),
+      radial-gradient(ellipse at 80% 70%, rgba(0, 60, 140, 0.35) 0%, transparent 55%),
+      radial-gradient(ellipse at 50% 50%, rgba(0, 20, 60, 0.6) 0%, transparent 80%),
+      radial-gradient(ellipse at 10% 80%, rgba(20, 0, 80, 0.3) 0%, transparent 45%),
+      radial-gradient(ellipse at 90% 10%, rgba(0, 80, 100, 0.25) 0%, transparent 45%),
+      linear-gradient(135deg, #020510 0%, #040818 50%, #020510 100%);
+    pointer-events: none;
+  }
+
+  /* Stars layer 1 - small */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image:
+      radial-gradient(circle, #ffffff 1px, transparent 1px),
+      radial-gradient(circle, #ffffff 1px, transparent 1px),
+      radial-gradient(circle, #aad4ff 1px, transparent 1px),
+      radial-gradient(circle, #ffffff 0.5px, transparent 0.5px);
+    background-size: 200px 200px, 350px 350px, 150px 150px, 80px 80px;
+    background-position: 0 0, 100px 50px, 30px 80px, 60px 20px;
+    opacity: 0.6;
+    pointer-events: none;
+    animation: twinkle 8s ease-in-out infinite alternate;
+  }
+
+  @keyframes twinkle {
+    0% { opacity: 0.5; }
+    50% { opacity: 0.8; }
+    100% { opacity: 0.5; }
+  }
+
+  /* Shooting star */
+  .shooting-star {
+    position: fixed;
+    top: 15%;
+    left: -10%;
+    width: 200px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #fff, transparent);
+    animation: shoot 6s linear infinite;
+    z-index: 0;
+    opacity: 0.7;
+  }
+  .shooting-star:nth-child(2) { top: 40%; animation-delay: 2.5s; width: 150px; }
+  .shooting-star:nth-child(3) { top: 65%; animation-delay: 5s; width: 100px; }
+
+  @keyframes shoot {
+    0% { transform: translateX(0) rotate(-15deg); opacity: 0; }
+    10% { opacity: 0.7; }
+    90% { opacity: 0.7; }
+    100% { transform: translateX(120vw) rotate(-15deg); opacity: 0; }
+  }
+
+  #root { position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+<div class="shooting-star"></div>
+<div class="shooting-star"></div>
+<div class="shooting-star"></div>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const C = {
+  bg: "transparent", card: "rgba(8,16,36,0.82)", border: "#1a2e4a",
+  green: "#3dd68c", blue: "#4db8ff", gold: "#f0c040",
+  red: "#ff5f5f", text: "#e8f0fe", muted: "#7a92b0",
+};
+
+const STATUS = {
+  "Pending":    { color: "#f0c040", bg: "#2a2000" },
+  "Assigned":   { color: "#4db8ff", bg: "#001a2e" },
+  "In Transit": { color: "#3dd68c", bg: "#002218" },
+  "Delivered":  { color: "#a0f0a0", bg: "#001a00" },
+  "Issue":      { color: "#ff5f5f", bg: "#2a0000" },
+};
+
+const INIT_LOADS = [
+  { id:"CD-1001", origin:"Atlanta, GA", destination:"Chicago, IL", pickupDate:"2026-03-10", deliveryDate:"2026-03-12", rate:"2800", commodity:"Auto Parts", instructions:"Call 1hr before pickup", status:"In Transit", carrierId:"c1" },
+  { id:"CD-1002", origin:"Dallas, TX", destination:"Los Angeles, CA", pickupDate:"2026-03-11", deliveryDate:"2026-03-14", rate:"3500", commodity:"Electronics", instructions:"Temp controlled", status:"Pending", carrierId:"" },
+  { id:"CD-1003", origin:"Miami, FL", destination:"New York, NY", pickupDate:"2026-03-09", deliveryDate:"2026-03-11", rate:"2200", commodity:"General Freight", instructions:"", status:"Delivered", carrierId:"c2" },
+];
+
+const INIT_CARRIERS = [
+  { id:"c1", name:"Rodriguez Trucking", driver:"Miguel Rodriguez", truck:"Peterbilt 389", phone:"555-0101", email:"miguel@rodriguez.com", password:"carrier1" },
+  { id:"c2", name:"Swift Haulers LLC", driver:"James Swift", truck:"Kenworth T680", phone:"555-0202", email:"james@swifthaulers.com", password:"carrier2" },
+];
+
+function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch{} }
+function load(key, def) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch { return def; } }
+
+// --- UI Atoms ---
+function Badge({ status }) {
+  const s = STATUS[status] || { color:"#aaa", bg:"#111" };
+  return <span style={{ background:s.bg, color:s.color, border:`1px solid ${s.color}44`, padding:"2px 10px", borderRadius:20, fontSize:12, fontWeight:700, letterSpacing:1 }}>{status}</span>;
+}
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#000b", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:16, width:"100%", maxWidth:560, maxHeight:"90vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"18px 24px", borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:17 }}>{title}</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:C.muted, fontSize:24, cursor:"pointer", lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ padding:24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:14 }}>
+      {label && <label style={{ color:C.muted, fontSize:11, display:"block", marginBottom:4, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase" }}>{label}</label>}
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = { width:"100%", background:"#070f1c", border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", color:C.text, fontSize:14, outline:"none", boxSizing:"border-box" };
+
+function Inp({ label, ...p }) {
+  return <Field label={label}><input {...p} style={{ ...inputStyle, ...p.style }} /></Field>;
+}
+function Sel({ label, options, ...p }) {
+  return (
+    <Field label={label}>
+      <select {...p} style={{ ...inputStyle }}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </Field>
+  );
+}
+function Btn({ children, v="primary", ...p }) {
+  const vs = {
+    primary: { background:"linear-gradient(135deg,#1a7a4a,#3dd68c)", color:"#001a0a", fontWeight:800 },
+    secondary: { background:"transparent", border:`1px solid ${C.border}`, color:C.text },
+    danger: { background:"#2a0000", border:"1px solid #ff5f5f44", color:"#ff5f5f" },
+    blue: { background:"linear-gradient(135deg,#0a3a6a,#4db8ff)", color:"#001a2e", fontWeight:800 },
+  };
+  return <button {...p} style={{ padding:"9px 18px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, transition:"opacity .2s", ...vs[v], ...p.style }}>{children}</button>;
+}
+function Stat({ label, value, color }) {
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px 22px", flex:1, minWidth:110 }}>
+      <div style={{ color:C.muted, fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", marginBottom:6 }}>{label}</div>
+      <div style={{ color:color||C.text, fontSize:30, fontWeight:900, letterSpacing:-1 }}>{value}</div>
+    </div>
+  );
+}
+
+// --- Load Form ---
+function LoadForm({ load, carriers, onSave, onClose }) {
+  const blank = { id:"", origin:"", destination:"", pickupDate:"", deliveryDate:"", rate:"", commodity:"", instructions:"", status:"Pending", carrierId:"" };
+  const [f, setF] = useState(load || blank);
+  const set = (k,v) => setF(x => ({...x,[k]:v}));
+  return (
+    <>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+        <Inp label="Load #" value={f.id} onChange={e=>set("id",e.target.value)} placeholder="CD-1004" />
+        <Sel label="Status" value={f.status} onChange={e=>set("status",e.target.value)} options={Object.keys(STATUS).map(s=>({value:s,label:s}))} />
+        <Inp label="Origin" value={f.origin} onChange={e=>set("origin",e.target.value)} placeholder="City, ST" />
+        <Inp label="Destination" value={f.destination} onChange={e=>set("destination",e.target.value)} placeholder="City, ST" />
+        <Inp label="Pickup Date" type="date" value={f.pickupDate} onChange={e=>set("pickupDate",e.target.value)} />
+        <Inp label="Delivery Date" type="date" value={f.deliveryDate} onChange={e=>set("deliveryDate",e.target.value)} />
+        <Inp label="Rate ($)" value={f.rate} onChange={e=>set("rate",e.target.value)} placeholder="0.00" />
+        <Inp label="Commodity" value={f.commodity} onChange={e=>set("commodity",e.target.value)} placeholder="Freight type" />
+      </div>
+      <Sel label="Assign Carrier" value={f.carrierId} onChange={e=>set("carrierId",e.target.value)}
+        options={[{value:"",label:"— Unassigned —"},...carriers.map(c=>({value:c.id,label:c.name+" — "+c.driver}))]} />
+      <Field label="Special Instructions">
+        <textarea value={f.instructions} onChange={e=>set("instructions",e.target.value)}
+          style={{ ...inputStyle, minHeight:70, resize:"vertical" }} />
+      </Field>
+      <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+        <Btn v="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={()=>onSave(f)}>Save Load</Btn>
+      </div>
+    </>
+  );
+}
+
+// --- Carrier Form ---
+function CarrierForm({ carrier, onSave, onClose }) {
+  const blank = { id:"", name:"", driver:"", truck:"", phone:"", email:"", password:"" };
+  const [f, setF] = useState(carrier || blank);
+  const set = (k,v) => setF(x => ({...x,[k]:v}));
+  return (
+    <>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+        <Inp label="Company Name" value={f.name} onChange={e=>set("name",e.target.value)} />
+        <Inp label="Driver Name" value={f.driver} onChange={e=>set("driver",e.target.value)} />
+        <Inp label="Truck / Equipment" value={f.truck} onChange={e=>set("truck",e.target.value)} />
+        <Inp label="Phone" value={f.phone} onChange={e=>set("phone",e.target.value)} />
+        <Inp label="Email (Login)" value={f.email} onChange={e=>set("email",e.target.value)} />
+        <Inp label="Password" value={f.password} onChange={e=>set("password",e.target.value)} />
+      </div>
+      <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+        <Btn v="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={()=>onSave(f)}>Save Carrier</Btn>
+      </div>
+    </>
+  );
+}
+
+// --- Admin Dashboard ---
+function AdminDashboard({ loads, carriers, setLoads, setCarriers, onLogout }) {
+  const [tab, setTab] = useState("loads");
+  const [loadModal, setLoadModal] = useState(null);
+  const [carrierModal, setCarrierModal] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [search, setSearch] = useState("");
+
+  const stats = {
+    total: loads.length,
+    pending: loads.filter(l=>l.status==="Pending").length,
+    transit: loads.filter(l=>l.status==="In Transit").length,
+    delivered: loads.filter(l=>l.status==="Delivered").length,
+  };
+
+  const filtered = loads.filter(l =>
+    [l.id,l.origin,l.destination,l.commodity,l.status].some(v=>v?.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  function saveLoad(f) {
+    if (!f.id) return alert("Load # is required");
+    let updated;
+    if (loadModal !== "new" && loads.find(l=>l.id===f.id)) {
+      updated = loads.map(l=>l.id===f.id?f:l);
+    } else {
+      if (loads.find(l=>l.id===f.id)) return alert("Load # already exists");
+      updated = [...loads, f];
+    }
+    setLoads(updated); store("cd_loads", updated); setLoadModal(null);
+  }
+
+  function delLoad(id) {
+    if (!confirm("Delete this load?")) return;
+    const u = loads.filter(l=>l.id!==id); setLoads(u); store("cd_loads",u);
+  }
+
+  function saveCarrier(f) {
+    if (!f.name||!f.email) return alert("Name and email required");
+    if (!f.id) f.id = "c_"+Date.now();
+    const u = carriers.find(c=>c.id===f.id) ? carriers.map(c=>c.id===f.id?f:c) : [...carriers,f];
+    setCarriers(u); store("cd_carriers",u); setCarrierModal(null);
+  }
+
+  function delCarrier(id) {
+    if (!confirm("Delete this carrier?")) return;
+    const u = carriers.filter(c=>c.id!==id); setCarriers(u); store("cd_carriers",u);
+  }
+
+  const gc = id => carriers.find(c=>c.id===id);
+
+  const Tab = ({id,label}) => (
+    <button onClick={()=>setTab(id)} style={{ background:tab===id?"linear-gradient(135deg,#0a2a1a,#3dd68c22)":"transparent", border:tab===id?"1px solid #3dd68c55":"1px solid transparent", color:tab===id?C.green:C.muted, padding:"8px 20px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>{label}</button>
+  );
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.text }}>
+      {/* Header */}
+      <div style={{ background:C.card, borderBottom:`1px solid ${C.border}`, padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", height:62, position:"sticky", top:0, zIndex:50 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <img src="real_logo.png" alt="Celestial Harmonies Logo" style={{ height:50, width:"auto", objectFit:"contain" }} />
+          <Btn v="secondary" onClick={onLogout} style={{ fontSize:12, padding:"6px 14px" }}>Logout</Btn>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 16px" }}>
+        {/* Stats */}
+        <div style={{ display:"flex", gap:12, marginBottom:24, flexWrap:"wrap" }}>
+          <Stat label="Total Loads" value={stats.total} color={C.blue} />
+          <Stat label="Pending" value={stats.pending} color={C.gold} />
+          <Stat label="In Transit" value={stats.transit} color={C.green} />
+          <Stat label="Delivered" value={stats.delivered} color="#a0f0a0" />
+          <Stat label="Carriers" value={carriers.length} color={C.blue} />
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+          <Tab id="loads" label="📦 Loads" />
+          <Tab id="carriers" label="🚛 Carriers" />
+        </div>
+
+        {/* Loads */}
+        {tab==="loads" && (
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:16, overflow:"hidden" }}>
+            <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.border}`, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍  Search loads..."
+                style={{ flex:1, minWidth:160, background:"#070f1c", border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }} />
+              <Btn onClick={()=>setLoadModal("new")}>+ Add Load</Btn>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:`1px solid ${C.border}` }}>
+                    {["Load #","Route","Pickup","Delivery","Rate","Commodity","Carrier","Status","Actions"].map(h=>(
+                      <th key={h} style={{ padding:"10px 14px", color:C.muted, fontWeight:700, textAlign:"left", whiteSpace:"nowrap", fontSize:11, letterSpacing:.5 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length===0 && <tr><td colSpan={9} style={{ padding:40, textAlign:"center", color:C.muted }}>No loads found</td></tr>}
+                  {filtered.map(l => {
+                    const cr = gc(l.carrierId);
+                    return (
+                      <tr key={l.id} style={{ borderBottom:`1px solid ${C.border}22` }}
+                        onMouseEnter={e=>e.currentTarget.style.background="#ffffff08"}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                        <td style={{ padding:"12px 14px", color:C.gold, fontWeight:700 }}>{l.id}</td>
+                        <td style={{ padding:"12px 14px" }}>
+                          <div style={{ color:C.text, fontSize:12 }}>{l.origin}</div>
+                          <div style={{ color:C.green, fontSize:11 }}>→ {l.destination}</div>
+                        </td>
+                        <td style={{ padding:"12px 14px", color:C.muted, whiteSpace:"nowrap" }}>{l.pickupDate}</td>
+                        <td style={{ padding:"12px 14px", color:C.muted, whiteSpace:"nowrap" }}>{l.deliveryDate}</td>
+                        <td style={{ padding:"12px 14px", color:C.green, fontWeight:700 }}>${Number(l.rate).toLocaleString()}</td>
+                        <td style={{ padding:"12px 14px", color:C.text }}>{l.commodity}</td>
+                        <td style={{ padding:"12px 14px", color:cr?C.blue:C.muted, fontSize:12 }}>{cr?cr.name:"Unassigned"}</td>
+                        <td style={{ padding:"12px 14px" }}><Badge status={l.status} /></td>
+                        <td style={{ padding:"12px 14px" }}>
+                          <div style={{ display:"flex", gap:6 }}>
+                            <Btn v="secondary" style={{ fontSize:11, padding:"4px 10px" }} onClick={()=>setDetail(l)}>View</Btn>
+                            <Btn v="secondary" style={{ fontSize:11, padding:"4px 10px" }} onClick={()=>setLoadModal(l)}>Edit</Btn>
+                            <Btn v="danger" style={{ fontSize:11, padding:"4px 10px" }} onClick={()=>delLoad(l.id)}>Del</Btn>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Carriers */}
+        {tab==="carriers" && (
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:16, overflow:"hidden" }}>
+            <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"flex-end" }}>
+              <Btn onClick={()=>setCarrierModal({})}>+ Add Carrier</Btn>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:`1px solid ${C.border}` }}>
+                    {["Company","Driver","Truck","Phone","Email","Active Loads","Actions"].map(h=>(
+                      <th key={h} style={{ padding:"10px 14px", color:C.muted, fontWeight:700, textAlign:"left", fontSize:11, letterSpacing:.5 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {carriers.length===0 && <tr><td colSpan={7} style={{ padding:40, textAlign:"center", color:C.muted }}>No carriers yet</td></tr>}
+                  {carriers.map(c => {
+                    const active = loads.filter(l=>l.carrierId===c.id&&l.status!=="Delivered").length;
+                    return (
+                      <tr key={c.id} style={{ borderBottom:`1px solid ${C.border}22` }}
+                        onMouseEnter={e=>e.currentTarget.style.background="#ffffff08"}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                        <td style={{ padding:"12px 14px", color:C.blue, fontWeight:700 }}>{c.name}</td>
+                        <td style={{ padding:"12px 14px", color:C.text }}>{c.driver}</td>
+                        <td style={{ padding:"12px 14px", color:C.muted }}>{c.truck}</td>
+                        <td style={{ padding:"12px 14px", color:C.muted }}>{c.phone}</td>
+                        <td style={{ padding:"12px 14px", color:C.muted }}>{c.email}</td>
+                        <td style={{ padding:"12px 14px" }}><span style={{ color:active>0?C.green:C.muted, fontWeight:700 }}>{active}</span></td>
+                        <td style={{ padding:"12px 14px" }}>
+                          <div style={{ display:"flex", gap:6 }}>
+                            <Btn v="secondary" style={{ fontSize:11, padding:"4px 10px" }} onClick={()=>setCarrierModal(c)}>Edit</Btn>
+                            <Btn v="danger" style={{ fontSize:11, padding:"4px 10px" }} onClick={()=>delCarrier(c.id)}>Del</Btn>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {loadModal && (
+        <Modal title={loadModal==="new"?"New Load":`Edit Load ${loadModal.id}`} onClose={()=>setLoadModal(null)}>
+          <LoadForm load={loadModal==="new"?null:loadModal} carriers={carriers} onSave={saveLoad} onClose={()=>setLoadModal(null)} />
+        </Modal>
+      )}
+      {carrierModal && (
+        <Modal title={carrierModal.id?`Edit ${carrierModal.name}`:"New Carrier"} onClose={()=>setCarrierModal(null)}>
+          <CarrierForm carrier={carrierModal.id?carrierModal:null} onSave={saveCarrier} onClose={()=>setCarrierModal(null)} />
+        </Modal>
+      )}
+      {detail && (
+        <Modal title={`Load ${detail.id}`} onClose={()=>setDetail(null)}>
+          {[["Origin",detail.origin],["Destination",detail.destination],["Pickup Date",detail.pickupDate],["Delivery Date",detail.deliveryDate],
+            ["Rate","$"+Number(detail.rate).toLocaleString()],["Commodity",detail.commodity],
+            ["Carrier",gc(detail.carrierId)?.name||"Unassigned"],["Driver",gc(detail.carrierId)?.driver||"—"],
+            ["Phone",gc(detail.carrierId)?.phone||"—"]
+          ].map(([k,v])=>(
+            <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"9px 0", borderBottom:`1px solid ${C.border}33` }}>
+              <span style={{ color:C.muted, fontSize:11, fontWeight:700, letterSpacing:1 }}>{k.toUpperCase()}</span>
+              <span style={{ color:C.text, fontSize:13 }}>{v}</span>
+            </div>
+          ))}
+          {detail.instructions && (
+            <div style={{ marginTop:16, background:"#070f1c", borderRadius:8, padding:12 }}>
+              <div style={{ color:C.muted, fontSize:11, fontWeight:700, marginBottom:4 }}>SPECIAL INSTRUCTIONS</div>
+              <div style={{ color:C.text, fontSize:13 }}>{detail.instructions}</div>
+            </div>
+          )}
+          <div style={{ marginTop:16, display:"flex", justifyContent:"center" }}><Badge status={detail.status} /></div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// --- Carrier Portal ---
+function CarrierPortal({ carrier, loads, setLoads, onLogout }) {
+  const mine = loads.filter(l=>l.carrierId===carrier.id);
+
+  function updateStatus(id, s) {
+    const u = loads.map(l=>l.id===id?{...l,status:s}:l);
+    setLoads(u); store("cd_loads",u);
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.text }}>
+      <div style={{ background:C.card, borderBottom:`1px solid ${C.border}`, padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", height:62, position:"sticky", top:0, zIndex:50 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <img src="real_logo.png" alt="Celestial Harmonies Logo" style={{ height:50, width:"auto", objectFit:"contain" }} />
+          <div>
+            <div style={{ fontWeight:900, fontSize:15, color:C.text, letterSpacing:2, fontFamily:"'Orbitron',sans-serif" }}>CELESTIAL HARMONIES</div>
+            <div style={{ color:C.muted, fontSize:10, letterSpacing:3 }}>CARRIER PORTAL</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ color:C.blue, fontWeight:700, fontSize:13 }}>{carrier.name}</div>
+            <div style={{ color:C.muted, fontSize:11 }}>{carrier.driver} · {carrier.truck}</div>
+          </div>
+          <Btn v="secondary" onClick={onLogout} style={{ fontSize:12, padding:"6px 14px" }}>Logout</Btn>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"24px 16px" }}>
+        <div style={{ display:"flex", gap:12, marginBottom:24, flexWrap:"wrap" }}>
+          <Stat label="My Loads" value={mine.length} color={C.blue} />
+          <Stat label="In Transit" value={mine.filter(l=>l.status==="In Transit").length} color={C.green} />
+          <Stat label="Delivered" value={mine.filter(l=>l.status==="Delivered").length} color="#a0f0a0" />
+        </div>
+
+        {mine.length===0 ? (
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:16, padding:48, textAlign:"center", color:C.muted, fontSize:16 }}>
+            No loads assigned yet. Check back soon!
+          </div>
+        ) : mine.map(l => (
+          <div key={l.id} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:16, marginBottom:16, overflow:"hidden" }}>
+            <div style={{ padding:"14px 20px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+              <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+                <span style={{ color:C.gold, fontWeight:900, fontSize:17, fontFamily:"'Orbitron',sans-serif" }}>{l.id}</span>
+                <Badge status={l.status} />
+              </div>
+              <span style={{ color:C.green, fontWeight:800, fontSize:20 }}>${Number(l.rate).toLocaleString()}</span>
+            </div>
+            <div style={{ padding:"16px 20px", display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:16 }}>
+              <div>
+                <div style={{ color:C.muted, fontSize:10, fontWeight:700, letterSpacing:1.5, marginBottom:4 }}>PICKUP</div>
+                <div style={{ color:C.text, fontWeight:700 }}>{l.origin}</div>
+                <div style={{ color:C.muted, fontSize:12 }}>{l.pickupDate}</div>
+              </div>
+              <div>
+                <div style={{ color:C.muted, fontSize:10, fontWeight:700, letterSpacing:1.5, marginBottom:4 }}>DELIVERY</div>
+                <div style={{ color:C.green, fontWeight:700 }}>{l.destination}</div>
+                <div style={{ color:C.muted, fontSize:12 }}>{l.deliveryDate}</div>
+              </div>
+              <div>
+                <div style={{ color:C.muted, fontSize:10, fontWeight:700, letterSpacing:1.5, marginBottom:4 }}>COMMODITY</div>
+                <div style={{ color:C.text }}>{l.commodity}</div>
+              </div>
+              {l.instructions && (
+                <div>
+                  <div style={{ color:C.muted, fontSize:10, fontWeight:700, letterSpacing:1.5, marginBottom:4 }}>INSTRUCTIONS</div>
+                  <div style={{ color:C.text, fontSize:12 }}>{l.instructions}</div>
+                </div>
+              )}
+            </div>
+            <div style={{ padding:"12px 20px", borderTop:`1px solid ${C.border}22`, display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+              <span style={{ color:C.muted, fontSize:12, fontWeight:700 }}>UPDATE STATUS:</span>
+              {Object.keys(STATUS).filter(s=>s!==l.status).map(s=>(
+                <button key={s} onClick={()=>updateStatus(l.id,s)}
+                  style={{ padding:"5px 14px", borderRadius:8, background:STATUS[s].bg, border:`1px solid ${STATUS[s].color}55`, color:STATUS[s].color, cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:"'Rajdhani',sans-serif" }}>{s}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// --- Login ---
+function Login({ carriers, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [err, setErr] = useState("");
+
+  function go() {
+    if (email==="ceo.celestialdispatch@gmail.com" && pass==="Holymusic1!") { onLogin({role:"admin"}); return; }
+    const c = carriers.find(x=>x.email===email&&x.password===pass);
+    if (c) { onLogin({role:"carrier",carrier:c}); return; }
+    setErr("Invalid email or password.");
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", padding:16, fontFamily:"'Rajdhani',sans-serif" }}>
+      <div style={{ position:"fixed", inset:0, backgroundImage:"radial-gradient(circle,#ffffff08 1px,transparent 1px)", backgroundSize:"40px 40px", pointerEvents:"none" }} />
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:"40px 36px", width:"100%", maxWidth:420, position:"relative", zIndex:1 }}>
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <img src="real_logo.png" alt="Celestial Harmonies Logo" style={{ width:220, height:"auto", borderRadius:12, objectFit:"contain", margin:"0 auto 16px", display:"block" }} />
+          <div style={{ fontWeight:900, fontSize:20, color:C.text, letterSpacing:3, fontFamily:"'Orbitron',sans-serif" }}>CELESTIAL HARMONIES</div>
+          <div style={{ color:C.muted, fontSize:11, letterSpacing:4, marginTop:4 }}>DISPATCH MANAGEMENT</div>
+        </div>
+        <Inp label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" onKeyDown={e=>e.key==="Enter"&&go()} />
+        <Inp label="Password" type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&go()} />
+        {err && <div style={{ color:"#ff5f5f", fontSize:13, marginBottom:12, textAlign:"center" }}>{err}</div>}
+        <Btn onClick={go} style={{ width:"100%", padding:"13px", fontSize:15, letterSpacing:3, fontFamily:"'Orbitron',sans-serif" }}>SIGN IN</Btn>
+
+      </div>
+    </div>
+  );
+}
+
+// --- App ---
+function App() {
+  const [loads, setLoads] = useState(() => load("cd_loads", INIT_LOADS));
+  const [carriers, setCarriers] = useState(() => load("cd_carriers", INIT_CARRIERS));
+  const [session, setSession] = useState(null);
+
+  if (!session) return <Login carriers={carriers} onLogin={setSession} />;
+  if (session.role==="admin") return <AdminDashboard loads={loads} carriers={carriers} setLoads={setLoads} setCarriers={setCarriers} onLogout={()=>setSession(null)} />;
+  return <CarrierPortal carrier={session.carrier} loads={loads} setLoads={setLoads} onLogout={()=>setSession(null)} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
