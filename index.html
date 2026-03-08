@@ -1535,7 +1535,33 @@
     .day-picker { flex-direction: column; }
     .time-slots { grid-template-columns: repeat(3, 1fr); }
   }
+.nav-links {
+  display: none;
+  flex-direction: column;
+  list-style: none;
+  position: absolute;
+  top: 60px;
+  right: 0;
+  background: #000;
+  width: 200px;
+  padding: 1rem;
+  z-index: 999;
+}
 
+.nav-links.open {
+  display: flex;
+}
+
+.nav-links a {
+  color: #fff;
+  text-decoration: none;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+}
+
+.nav-links a:hover {
+  color: var(--gold);
+}
 </style>
 </head>
 <body>
@@ -1566,7 +1592,9 @@
     <a href="https://www.facebook.com/share/1AWFsYMFGW/" target="_blank" class="social-btn facebook" title="Follow us on Facebook">f</a>
     <a href="https://www.linkedin.com/in/celestialharmoniesca" target="_blank" class="social-btn linkedin" title="Connect on LinkedIn">in</a>
   </div>
-  <div class="hamburger" id="hamburger" onclick="toggleNav()">
+ <ul class="nav-links" id="navLinks">
+  <li><a href="dispatch.html">Dispatch System</a></li>
+</ul> <div class="hamburger" id="hamburger" onclick="toggleNav()">
     <span></span><span></span><span></span>
   </div>
 </nav>
