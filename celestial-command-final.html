@@ -5304,17 +5304,12 @@ SCRIPT: [Write the exact words to say to ${broker} on the phone or via email. Ma
 INTEL: [3-4 bullet points with market intel, tips for this lane, what leverage the driver has, and one piece of advice for handling pushback. Use • for bullets.]`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+   const response = await fetch('https://celestial-ai-proxy.ceo-celestialdispatch.workers.dev', {
       method: 'POST',
       headers: {
           'Content-Type': 'application/json',
-          'x-api-key': localStorage.getItem('ccc_ai_key') || '',
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-calls': 'true'
         },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
         messages: [{ role: 'user', content: prompt }]
       })
     });
