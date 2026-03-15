@@ -6279,10 +6279,8 @@ function initGuideMap() {
 
 function startPositionWatch() {
   if (guideWatchId) navigator.geolocation.clearWatch(guideWatchId);
-
   // Track last position to calculate true bearing from movement
   var lastLat = null, lastLng = null, lastBearing = 0;
-
   // Build logo icon with rotation — JPEG not PNG
   function makeLiveIcon(deg) {
     var logoHtml = BLDG_B64
@@ -6293,8 +6291,8 @@ function startPositionWatch() {
       iconSize: [44, 44], iconAnchor: [22, 22], className: ''
     });
   }
-startGPSWatch();
-  }
+  startGPSWatch();
+}
 
 function centerOnMe() {
   if (!guideMap) return;
