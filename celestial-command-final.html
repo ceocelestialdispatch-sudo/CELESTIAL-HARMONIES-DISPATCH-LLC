@@ -6640,59 +6640,96 @@ function checkNextStep(lat, lng) {
   if (!guideSteps.length || guideStepIndex >= guideSteps.length) return;
   const step = guideSteps[guideStepIndex];
   if (!step) return;
-
-  // Get distance to next waypoint
   if (!guideRouteCoords || !guideRouteCoords.length) return;
 
-  // Find closest point index on route
+  // Find closest point on route
   let minDist = Infinity;
-  let closestIdx = 0;
-  for (let i = guideLastRouteIdx || 0; i < guideRouteCoords.length; i++) {
+  let closestIdx = guideLastRouteIdx || 0;
+  const searchEnd = Math.min(guideRouteCoords.length, closestIdx + 300);
+  for (let i = closestIdx; i < searchEnd; i++) {
     const d = haversine(lat, lng, guideRouteCoords[i][0], guideRouteCoords[i][1]);
     if (d < minDist) { minDist = d; closestIdx = i; }
-    if (d > minDist + 0.1) break; // Stop searching once we pass closest
+    if (d > minDist + 0.1) break;
   }
   guideLastRouteIdx = Math.max(0, closestIdx - 2);
 
-  // Calculate step waypoint index
   const stepWaypointIdx = guideStepWaypoints[guideStepIndex];
   if (stepWaypointIdx === undefined) return;
 
-  // Distance to next turn in miles
-  const distToTurn = haversine(lat, lng, guideRouteCoords[stepWaypointIdx][0], guideRouteCoords[stepWaypointIdx][1]);
+  const distToTurn = haversine(
+    lat, lng,
+    guideRouteCoords[stepWaypointIdx][0],
+    guideRouteCoords[stepWaypointIdx][1]
+  );
 
-  // Update next turn display
+  // ── BUILD CLEAN INSTRUCTION WITH EXIT NUMBER ──
+  function buildInstruction(s) {
+    let text = s.instruction || '';
+
+    // Fix left/right if reversed — swap them
+    text = text
+      .replace(/\bturn left\b/gi, '%%LEFT%%')
+      .replace(/\bturn right\b/gi, '%%RIGHT%%')
+      .replace(/\bkeep left\b/gi, '%%KEEPLEFT%%')
+      .replace(/\bkeep right\b/gi, '%%KEEPRIGHT%%')
+      .replace(/\bbear left\b/gi, '%%BEARLEFT%%')
+      .replace(/\bbear right\b/gi, '%%BEARRIGHT%%')
+      .replace(/%%LEFT%%/g, 'turn right')
+      .replace(/%%RIGHT%%/g, 'turn left')
+      .replace(/%%KEEPLEFT%%/g, 'keep right')
+      .replace(/%%KEEPRIGHT%%/g, 'keep left')
+      .replace(/%%BEARLEFT%%/g, 'bear right')
+      .replace(/%%BEARRIGHT%%/g, 'bear left');
+
+    // Add exit number if ORS sent one
+    if (s.exit_number && s.exit_number > 0) {
+      text = text + ', take exit ' + s.exit_number;
+    }
+
+    return text;
+  }
+
+  const instruction = buildInstruction(step);
+
+  // Update distance display
   const nextTurnEl = document.getElementById('guide-next-turn');
   if (nextTurnEl) {
     nextTurnEl.textContent = distToTurn < 0.1 ? 'NOW' : distToTurn.toFixed(1) + ' mi';
   }
 
-  // Announce at 0.5 miles
-  if (distToTurn < 0.5 && distToTurn > 0.3 && !step._announced05) {
+  // ── ANNOUNCE AT 1 MILE — plenty of time for a truck ──
+  if (distToTurn < 1.0 && distToTurn > 0.85 && !step._announced10) {
+    step._announced10 = true;
+    if (guideVoiceEnabled) speak('In 1 mile, ' + instruction);
+  }
+
+  // ── ANNOUNCE AT HALF MILE ──
+  if (distToTurn < 0.5 && distToTurn > 0.38 && !step._announced05) {
     step._announced05 = true;
-    if (guideVoiceEnabled) speak('In half a mile, ' + step.instruction);
+    if (guideVoiceEnabled) speak('In half a mile, ' + instruction);
   }
 
-  // Announce at 0.2 miles
-  if (distToTurn < 0.2 && distToTurn > 0.1 && !step._announced02) {
+  // ── ANNOUNCE AT QUARTER MILE ──
+  if (distToTurn < 0.25 && distToTurn > 0.15 && !step._announced02) {
     step._announced02 = true;
-    if (guideVoiceEnabled) speak('In a quarter mile, ' + step.instruction);
+    if (guideVoiceEnabled) speak('In a quarter mile, ' + instruction);
   }
 
-  // Execute turn when within 0.08 miles (~420 feet)
-  if (distToTurn < 0.08) {
-    if (guideVoiceEnabled) speak(step.instruction);
+  // ── EXECUTE TURN — within 400 feet ──
+  if (distToTurn < 0.075) {
+    if (guideVoiceEnabled) speak(instruction);
     guideStepIndex++;
     if (guideStepIndex < guideSteps.length) {
       showCurrentStep();
-      // Highlight current step in directions list
       highlightStep(guideStepIndex);
     } else {
-      // Arrived!
       document.getElementById('guide-instruction-icon').textContent = '🏁';
-      document.getElementById('guide-instruction-text').textContent = 'You have arrived at your destination!';
+      document.getElementById('guide-instruction-text').textContent =
+        'You have arrived at your destination!';
       document.getElementById('guide-instruction-dist').textContent = '';
-      if (guideVoiceEnabled) speak('You have arrived at your destination. Safe travels, and keep those wheels turning.');
+      if (guideVoiceEnabled) speak(
+        'You have arrived at your destination. Safe travels, and keep those wheels turning.'
+      );
       releaseWakeLock();
     }
   }
@@ -6830,16 +6867,40 @@ function toggleVoice() {
 }
 
 function speak(text) {
-  if (!guideVoiceEnabled || !window.speechSynthesis) return;
+  if (!guideVoiceEnabled) return;
+  
+  // Cancel anything queued — speak immediately, no waiting
   window.speechSynthesis.cancel();
+  
   const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 0.92;
+  utter.rate = 0.88;
   utter.pitch = 1.0;
   utter.volume = 1.0;
-  // Try to use a good voice
+  
+  // Pick the clearest US English voice available
   const voices = window.speechSynthesis.getVoices();
-  const preferred = voices.find(v => v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Alex'));
+  const preferred = voices.find(v =>
+    v.name.includes('Google US English') ||
+    v.name.includes('Samantha') ||
+    v.name.includes('Karen') ||
+    v.name.includes('Zira') ||
+    (v.lang === 'en-US' && !v.name.toLowerCase().includes('compact'))
+  );
   if (preferred) utter.voice = preferred;
+  
+  // Chrome bug fix — long speech cuts off after ~15 seconds
+  utter.onstart = function() {
+    window._speakTimer = setInterval(function() {
+      if (!window.speechSynthesis.speaking) {
+        clearInterval(window._speakTimer);
+        return;
+      }
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    }, 10000);
+  };
+  utter.onend = function() { clearInterval(window._speakTimer); };
+  
   window.speechSynthesis.speak(utter);
 }
 
