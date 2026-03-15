@@ -6293,98 +6293,8 @@ function startPositionWatch() {
       iconSize: [44, 44], iconAnchor: [22, 22], className: ''
     });
   }
-
-  guideWatchId = navigator.geolocation.watchPosition(function(pos) {
-    var lat = pos.coords.latitude;
-    var lng = pos.coords.longitude;
-    var speed = pos.coords.speed ? Math.round(pos.coords.speed * 2.237) : 0;
-
-    // ── CALCULATE TRUE BEARING FROM MOVEMENT — never trust device compass ──
-    if (lastLat !== null && lastLng !== null && speed > 2) {
-      var dLng = (lng - lastLng) * Math.PI / 180;
-      var lat1r = lastLat * Math.PI / 180;
-      var lat2r = lat * Math.PI / 180;
-      var y = Math.sin(dLng) * Math.cos(lat2r);
-      var x = Math.cos(lat1r) * Math.sin(lat2r) - Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
-      lastBearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-    }
-    lastLat = lat;
-    lastLng = lng;
-
-    // ── UPDATE MARKER — always rebuild icon so logo stays ──
-    if (guideMarker) {
-      guideMarker.setLatLng([lat, lng]);
-      guideMarker.setIcon(makeLiveIcon(lastBearing));  // Always update icon to keep logo
-    } else {
-      guideMarker = L.marker([lat, lng], { icon: makeLiveIcon(lastBearing) }).addTo(guideMap);
-    }
-
-    // ── SPEED DISPLAY ──
-    document.getElementById('guide-speed').textContent = speed + ' mph';
-    var fsSpeed = document.getElementById('guide-fs-speed');
-    if (fsSpeed) fsSpeed.textContent = speed + ' mph';
-
-    // ── SYNC FULLSCREEN INSTRUCTION ──
-    var pairs = [
-      ['guide-instruction-text','guide-fs-text'],
-      ['guide-instruction-icon','guide-fs-icon'],
-      ['guide-instruction-dist','guide-fs-dist'],
-      ['guide-next-turn','guide-fs-next']
-    ];
-    pairs.forEach(function(p) {
-      var src = document.getElementById(p[0]);
-      var dst = document.getElementById(p[1]);
-      if (src && dst) dst.textContent = src.textContent;
-    });
-
-    // ── CENTER MAP ON TRUCK — only if user is not manually panning ──
-    if (guideMap && guideRouteCoords && guideRouteCoords.length && !guideUserPanning) {
-      guideMap.setView([lat, lng], 16);
-    }
-    if (guideFullscreen && guideFsMap && !guideUserPanning) {
-      guideFsMap.setView([lat, lng], 16);
-      if (guideFsMarker) {
-        guideFsMarker.setLatLng([lat, lng]);
-        if (speed > 2) guideFsMarker.setIcon(makeLiveIcon(lastBearing));
-      }
-    }
-
-    checkNextStep(lat, lng);
-
-    // ── OFF-ROUTE DETECTION — only when moving > 5 mph, prevents false triggers ──
-    if (guideRouteCoords && guideRouteCoords.length && guideSteps.length && speed > 5) {
-      var minDist = Infinity;
-      var bestIdx = guideLastRouteIdx || 0;
-      var searchStart = Math.max(0, bestIdx - 50);
-      var searchEnd = Math.min(guideRouteCoords.length, bestIdx + 250);
-      for (var ri = searchStart; ri < searchEnd; ri++) {
-        var d = haversine(lat, lng, guideRouteCoords[ri][0], guideRouteCoords[ri][1]);
-        if (d < minDist) { minDist = d; bestIdx = ri; }
-      }
-      guideLastRouteIdx = bestIdx;
-
-      // Count consecutive off-route readings — ignore single GPS blips
-      if (minDist > 0.40) {
-        guideOffRouteStrikes = (guideOffRouteStrikes || 0) + 1;
-      } else {
-        guideOffRouteStrikes = 0;
-      }
-      if (guideOffRouteStrikes >= 3 && !guideRecalculating) {
-        guideOffRouteStrikes = 0;
-        guideRecalculating = true;
-        if (guideVoiceEnabled) speak('Off route. Recalculating your truck route now.');
-        var bannerText = document.getElementById('guide-instruction-text');
-        if (bannerText) bannerText.textContent = 'Recalculating...';
-        setTimeout(function() {
-          guideRecalculating = false;
-          recalculateRoute(lat, lng);
-        }, 2000);
-      }
-    }
-  }, function(err) {
-    console.log('GPS error:', err.message);
-  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
-}
+startGPSWatch();
+  }
 
 function centerOnMe() {
   if (!guideMap) return;
@@ -6631,272 +6541,348 @@ function jumpToStep(i) {
   if (guideVoiceEnabled) speak(guideSteps[i].instruction);
 }
 
+
+Copy
+
+// ══════════════════════════════════════════════════════════════════
+// CELESTIAL HARMONIES GPS — COMPLETE NAVIGATION REWRITE
+// Fixes: left/right reversed | voice late | lag & constant redirect
+// ══════════════════════════════════════════════════════════════════
+ 
+// ── KALMAN FILTER — smooths jumpy GPS so map never lags ──
+var gpsKalman = {
+  lat: null, lng: null,
+  variance: -1,
+  minAccuracy: 1,
+  Q: 3,   // process noise — higher = trust GPS more
+  reset: function() { this.lat = null; this.lng = null; this.variance = -1; },
+  filter: function(lat, lng, accuracy) {
+    if (accuracy < this.minAccuracy) accuracy = this.minAccuracy;
+    if (this.variance < 0) {
+      this.lat = lat; this.lng = lng; this.variance = accuracy * accuracy;
+    } else {
+      this.variance += this.Q * this.Q;
+      var K = this.variance / (this.variance + accuracy * accuracy);
+      this.lat = this.lat + K * (lat - this.lat);
+      this.lng = this.lng + K * (lng - this.lng);
+      this.variance = (1 - K) * this.variance;
+    }
+    return { lat: this.lat, lng: this.lng };
+  }
+};
+ 
+// ── POSITION HISTORY — for dead reckoning & bearing ──
+var posHistory = [];
+var MAX_HISTORY = 5;
+ 
+function updatePositionHistory(lat, lng, speed) {
+  posHistory.push({ lat: lat, lng: lng, speed: speed, time: Date.now() });
+  if (posHistory.length > MAX_HISTORY) posHistory.shift();
+}
+ 
+// ── BEARING FROM MOVEMENT — uses last 2-3 positions for stability ──
+function calculateBearing() {
+  if (posHistory.length < 2) return lastBearing || 0;
+  // Use oldest and newest for most stable bearing
+  var p1 = posHistory[0];
+  var p2 = posHistory[posHistory.length - 1];
+  var dLng = (p2.lng - p1.lng) * Math.PI / 180;
+  var lat1r = p1.lat * Math.PI / 180;
+  var lat2r = p2.lat * Math.PI / 180;
+  var y = Math.sin(dLng) * Math.cos(lat2r);
+  var x = Math.cos(lat1r) * Math.sin(lat2r) - Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+ 
+// ── FIND CLOSEST POINT ON ROUTE — searches FORWARD only, never goes back ──
+// This is the core fix for lag and constant redirecting
+function findClosestRoutePoint(lat, lng) {
+  if (!guideRouteCoords || !guideRouteCoords.length) return 0;
+  
+  var minDist = Infinity;
+  var bestIdx = guideLastRouteIdx || 0;
+  
+  // Search forward from current position — never look backward
+  // Large window so fast drivers are never missed
+  var searchStart = Math.max(0, bestIdx);
+  var searchEnd = Math.min(guideRouteCoords.length - 1, bestIdx + 400);
+  
+  for (var i = searchStart; i <= searchEnd; i++) {
+    var d = haversine(lat, lng, guideRouteCoords[i][0], guideRouteCoords[i][1]);
+    if (d < minDist) {
+      minDist = d;
+      bestIdx = i;
+    }
+  }
+  
+  // If best is at the edge of our search window, expand forward
+  // (handles drivers who are moving very fast)
+  if (bestIdx >= searchEnd - 10 && searchEnd < guideRouteCoords.length - 1) {
+    var expandEnd = Math.min(guideRouteCoords.length - 1, bestIdx + 200);
+    for (var j = searchEnd; j <= expandEnd; j++) {
+      var d2 = haversine(lat, lng, guideRouteCoords[j][0], guideRouteCoords[j][1]);
+      if (d2 < minDist) {
+        minDist = d2;
+        bestIdx = j;
+      } else if (d2 > minDist + 0.5) {
+        break; // Safe to break here — we're moving away
+      }
+    }
+  }
+  
+  // ALWAYS advance — never go backwards
+  guideLastRouteIdx = Math.max(guideLastRouteIdx || 0, bestIdx);
+  return minDist;
+}
+ 
+// ── BUILD INSTRUCTION — NO left/right swap, trust ORS ──
+// ORS already gives correct directions. The swap was causing the problem.
+// We only clean up the text and add exit numbers.
+function buildInstruction(step) {
+  var text = step.instruction || '';
+  
+  // Add exit number if available
+  if (step.exit_number && step.exit_number > 0) {
+    text = text + ', take exit ' + step.exit_number;
+  }
+  
+  // Clean up common ORS quirks
+  text = text
+    .replace(/\bHead\b/gi, 'Continue')
+    .replace(/\bDepart\b/gi, 'Start')
+    .replace(/on unnamed road/gi, '')
+    .trim();
+  
+  return text;
+}
+ 
+// ── CHECK NEXT STEP — distance-based, forward-only ──
 function checkNextStep(lat, lng) {
   if (!guideSteps.length || guideStepIndex >= guideSteps.length) return;
-  const step = guideSteps[guideStepIndex];
+  var step = guideSteps[guideStepIndex];
   if (!step) return;
   if (!guideRouteCoords || !guideRouteCoords.length) return;
-
-  // Find closest point on route
-  let minDist = Infinity;
-  let closestIdx = guideLastRouteIdx || 0;
-  const searchEnd = Math.min(guideRouteCoords.length, closestIdx + 300);
-  for (let i = closestIdx; i < searchEnd; i++) {
-    const d = haversine(lat, lng, guideRouteCoords[i][0], guideRouteCoords[i][1]);
-    if (d < minDist) { minDist = d; closestIdx = i; }
-    if (d > minDist + 0.1) break;
-  }
-  guideLastRouteIdx = Math.max(0, closestIdx - 2);
-
-  const stepWaypointIdx = guideStepWaypoints[guideStepIndex];
+ 
+  // Find closest route point (advances forward only)
+  var distFromRoute = findClosestRoutePoint(lat, lng);
+ 
+  // Get distance to the actual turn waypoint
+  var stepWaypointIdx = guideStepWaypoints[guideStepIndex];
   if (stepWaypointIdx === undefined) return;
-
-  const distToTurn = haversine(
+ 
+  // Clamp waypoint to valid range
+  stepWaypointIdx = Math.min(stepWaypointIdx, guideRouteCoords.length - 1);
+ 
+  var distToTurn = haversine(
     lat, lng,
     guideRouteCoords[stepWaypointIdx][0],
     guideRouteCoords[stepWaypointIdx][1]
   );
-
-  // ── BUILD CLEAN INSTRUCTION WITH EXIT NUMBER ──
-  function buildInstruction(s) {
-    let text = s.instruction || '';
-
-    // Fix left/right if reversed — swap them
-    text = text
-      .replace(/\bturn left\b/gi, '%%LEFT%%')
-      .replace(/\bturn right\b/gi, '%%RIGHT%%')
-      .replace(/\bkeep left\b/gi, '%%KEEPLEFT%%')
-      .replace(/\bkeep right\b/gi, '%%KEEPRIGHT%%')
-      .replace(/\bbear left\b/gi, '%%BEARLEFT%%')
-      .replace(/\bbear right\b/gi, '%%BEARRIGHT%%')
-      .replace(/%%LEFT%%/g, 'turn right')
-      .replace(/%%RIGHT%%/g, 'turn left')
-      .replace(/%%KEEPLEFT%%/g, 'keep right')
-      .replace(/%%KEEPRIGHT%%/g, 'keep left')
-      .replace(/%%BEARLEFT%%/g, 'bear right')
-      .replace(/%%BEARRIGHT%%/g, 'bear left');
-
-    // Add exit number if ORS sent one
-    if (s.exit_number && s.exit_number > 0) {
-      text = text + ', take exit ' + s.exit_number;
-    }
-
-    return text;
-  }
-
-  const instruction = buildInstruction(step);
-
-  // Update distance display
-  const nextTurnEl = document.getElementById('guide-next-turn');
+ 
+  var instruction = buildInstruction(step);
+ 
+  // ── UPDATE DISTANCE DISPLAY ──
+  var nextTurnEl = document.getElementById('guide-next-turn');
   if (nextTurnEl) {
-    nextTurnEl.textContent = distToTurn < 0.1 ? 'NOW' : distToTurn.toFixed(1) + ' mi';
+    if (distToTurn < 0.1) {
+      nextTurnEl.textContent = 'NOW';
+    } else if (distToTurn < 1.0) {
+      nextTurnEl.textContent = Math.round(distToTurn * 5280) + ' ft';
+    } else {
+      nextTurnEl.textContent = distToTurn.toFixed(1) + ' mi';
+    }
   }
-
-  // ── ANNOUNCE AT 1 MILE — plenty of time for a truck ──
-  if (distToTurn < 1.0 && distToTurn > 0.85 && !step._announced10) {
-    step._announced10 = true;
+ 
+  // ── ANNOUNCE AT 1 MILE — trucks need more warning ──
+  if (distToTurn <= 1.0 && distToTurn > 0.85 && !step._a1) {
+    step._a1 = true;
     if (guideVoiceEnabled) speak('In 1 mile, ' + instruction);
   }
-
+ 
   // ── ANNOUNCE AT HALF MILE ──
-  if (distToTurn < 0.5 && distToTurn > 0.38 && !step._announced05) {
-    step._announced05 = true;
+  if (distToTurn <= 0.5 && distToTurn > 0.40 && !step._a05) {
+    step._a05 = true;
     if (guideVoiceEnabled) speak('In half a mile, ' + instruction);
   }
-
+ 
   // ── ANNOUNCE AT QUARTER MILE ──
-  if (distToTurn < 0.25 && distToTurn > 0.15 && !step._announced02) {
-    step._announced02 = true;
+  if (distToTurn <= 0.25 && distToTurn > 0.18 && !step._a025) {
+    step._a025 = true;
     if (guideVoiceEnabled) speak('In a quarter mile, ' + instruction);
   }
-
-  // ── EXECUTE TURN — within 400 feet ──
-  if (distToTurn < 0.075) {
-    if (guideVoiceEnabled) speak(instruction);
-    guideStepIndex++;
-    if (guideStepIndex < guideSteps.length) {
-      showCurrentStep();
-      highlightStep(guideStepIndex);
+ 
+  // ── EXECUTE TURN — 300 feet ──
+  if (distToTurn <= 0.057) { // ~300 feet
+    if (!step._executed) {
+      step._executed = true;
+      if (guideVoiceEnabled) speak(instruction);
+      guideStepIndex++;
+      if (guideStepIndex < guideSteps.length) {
+        showCurrentStep();
+        highlightStep(guideStepIndex);
+      } else {
+        // Arrived
+        document.getElementById('guide-instruction-icon').textContent = '🏁';
+        document.getElementById('guide-instruction-text').textContent = 'You have arrived at your destination!';
+        document.getElementById('guide-instruction-dist').textContent = '';
+        if (guideVoiceEnabled) speak('You have arrived at your destination. Safe travels, and keep those wheels turning.');
+        releaseWakeLock();
+      }
+    }
+  }
+}
+ 
+// ── MAIN GPS WATCH — Kalman filtered, smooth, no lag ──
+function startGPSWatch() {
+  if (guideWatchId) {
+    navigator.geolocation.clearWatch(guideWatchId);
+    guideWatchId = null;
+  }
+  
+  gpsKalman.reset();
+  posHistory = [];
+  
+  guideWatchId = navigator.geolocation.watchPosition(function(pos) {
+    var rawLat = pos.coords.latitude;
+    var rawLng = pos.coords.longitude;
+    var accuracy = pos.coords.accuracy || 10;
+    var speed = pos.coords.speed ? Math.round(pos.coords.speed * 2.237) : 0;
+ 
+    // ── KALMAN FILTER — removes GPS jitter immediately ──
+    var smooth = gpsKalman.filter(rawLat, rawLng, accuracy);
+    var lat = smooth.lat;
+    var lng = smooth.lng;
+ 
+    // ── UPDATE POSITION HISTORY ──
+    updatePositionHistory(lat, lng, speed);
+ 
+    // ── CALCULATE BEARING from movement history ──
+    if (speed > 3 && posHistory.length >= 2) {
+      lastBearing = calculateBearing();
+    }
+    lastLat = lat;
+    lastLng = lng;
+ 
+    // ── UPDATE TRUCK MARKER ──
+    if (guideMarker) {
+      guideMarker.setLatLng([lat, lng]);
+      guideMarker.setIcon(makeLiveIcon(lastBearing));
     } else {
-      document.getElementById('guide-instruction-icon').textContent = '🏁';
-      document.getElementById('guide-instruction-text').textContent =
-        'You have arrived at your destination!';
-      document.getElementById('guide-instruction-dist').textContent = '';
-      if (guideVoiceEnabled) speak(
-        'You have arrived at your destination. Safe travels, and keep those wheels turning.'
-      );
-      releaseWakeLock();
+      guideMarker = L.marker([lat, lng], { icon: makeLiveIcon(lastBearing) }).addTo(guideMap);
     }
-  }
-}
-
-function haversine(lat1, lng1, lat2, lng2) {
-  const R = 3958.8; // Earth radius in miles
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
-    Math.sin(dLng/2) * Math.sin(dLng/2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
-function highlightStep(idx) {
-  const items = document.querySelectorAll('#guide-directions-list > div');
-  items.forEach((el, i) => {
-    el.style.background = i === idx ? 'rgba(46,204,113,0.12)' : 'transparent';
-    el.style.borderRadius = '8px';
-  });
-  // Scroll to current step
-  if (items[idx]) items[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-function loadGalaxyAlertsOnMap() {
-  if (!guideMap) return;
-  const data = JSON.parse(localStorage.getItem('ccc_galaxy') || '{}');
-  const roads = [...(data.roads || []), ...GUIDE_SEED_ALERTS];
-  guideAlertMarkers.forEach(m => guideMap.removeLayer(m));
-  guideAlertMarkers = [];
-  if (!guideAlertsVisible) return;
-
-  roads.forEach(r => {
-    const coords = r.mapCoords;
-    if (!coords) return;
-    const alertIcon = L.divIcon({
-      html: `<div style="font-size:1.1rem;filter:drop-shadow(0 0 6px #EF5350);">${r.mapIcon || '⚠️'}</div>`,
-      iconSize: [24, 24], iconAnchor: [12, 12], className: ''
+ 
+    // ── SPEED DISPLAY ──
+    document.getElementById('guide-speed').textContent = speed + ' mph';
+    var fsSpeed = document.getElementById('guide-fs-speed');
+    if (fsSpeed) fsSpeed.textContent = speed + ' mph';
+ 
+    // ── SYNC FULLSCREEN INSTRUCTION ──
+    var pairs = [
+      ['guide-instruction-text','guide-fs-text'],
+      ['guide-instruction-icon','guide-fs-icon'],
+      ['guide-instruction-dist','guide-fs-dist'],
+      ['guide-next-turn','guide-fs-next']
+    ];
+    pairs.forEach(function(p) {
+      var src = document.getElementById(p[0]);
+      var dst = document.getElementById(p[1]);
+      if (src && dst) dst.textContent = src.textContent;
     });
-    const m = L.marker(coords, { icon: alertIcon })
-      .addTo(guideMap)
-      .bindPopup(`<strong style="color:#EF9A9A;">${r.type}</strong><br><strong>${r.location}</strong><br>${r.detail}<br><span style="color:rgba(212,247,232,0.5);font-size:0.75rem;">Posted by ${r.handle} · ${r.time}</span>`);
-    guideAlertMarkers.push(m);
-  });
-}
-
-function toggleAlerts() {
-  guideAlertsVisible = !guideAlertsVisible;
-  const btn = document.getElementById('guide-alert-btn');
-  if (guideAlertsVisible) {
-    btn.style.borderColor = 'rgba(201,168,76,0.4)';
-    btn.style.color = 'var(--gold)';
-    loadGalaxyAlertsOnMap();
-    if (guideVoiceEnabled) speak('Galaxy road alerts enabled.');
-  } else {
-    guideAlertMarkers.forEach(m => guideMap.removeLayer(m));
-    guideAlertMarkers = [];
-    btn.style.borderColor = 'rgba(212,247,232,0.2)';
-    btn.style.color = 'rgba(212,247,232,0.3)';
-  }
-}
-
-function showGalaxyAlertsNearRoute(routeLatLngs) {
-  const data = JSON.parse(localStorage.getItem('ccc_galaxy') || '{}');
-  // Only use REAL user-posted alerts — no seed alerts during live navigation
-  const userRoads = (data.roads || []).filter(r => {
-    if (!r.mapCoords) return false;
-    // Only alerts posted in the last 12 hours
-    if (r.timestamp) {
-      const ageMs = Date.now() - r.timestamp;
-      if (ageMs > 12 * 60 * 60 * 1000) return false;
+ 
+    // ── CENTER MAP — smooth follow, no jumping ──
+    if (guideMap && guideRouteCoords && guideRouteCoords.length && !guideUserPanning) {
+      guideMap.setView([lat, lng], 16, { animate: true, duration: 0.5 });
     }
-    // Must be within 25 miles of route
-    return routeLatLngs.some(pt => haversine(pt[0], pt[1], r.mapCoords[0], r.mapCoords[1]) < 25);
+    if (guideFullscreen && guideFsMap && !guideUserPanning) {
+      guideFsMap.setView([lat, lng], 16, { animate: true, duration: 0.5 });
+      if (guideFsMarker) {
+        guideFsMarker.setLatLng([lat, lng]);
+        if (speed > 3) guideFsMarker.setIcon(makeLiveIcon(lastBearing));
+      }
+    }
+ 
+    // ── CHECK NEXT STEP ──
+    if (guideSteps && guideSteps.length) {
+      checkNextStep(lat, lng);
+    }
+ 
+    // ── OFF-ROUTE DETECTION ──
+    // Only when moving, requires 4 consecutive readings to avoid false triggers
+    if (guideRouteCoords && guideRouteCoords.length && guideSteps.length && speed > 8) {
+      var distFromRoute = findClosestRoutePoint(lat, lng);
+      
+      if (distFromRoute > 0.30) { // ~1600 feet off route
+        guideOffRouteStrikes = (guideOffRouteStrikes || 0) + 1;
+      } else {
+        guideOffRouteStrikes = 0;
+      }
+      
+      // 4 strikes = definitely off route, not a GPS blip
+      if (guideOffRouteStrikes >= 4 && !guideRecalculating) {
+        guideOffRouteStrikes = 0;
+        guideRecalculating = true;
+        if (guideVoiceEnabled) speak('Off route. Recalculating your truck route now.');
+        var bannerText = document.getElementById('guide-instruction-text');
+        if (bannerText) bannerText.textContent = 'Recalculating...';
+        setTimeout(function() {
+          guideRecalculating = false;
+          recalculateRoute(lat, lng);
+        }, 2500);
+      }
+    } else {
+      // Reset strikes when stopped or slow — prevent false triggers at lights
+      if (speed < 5) guideOffRouteStrikes = 0;
+    }
+ 
+  }, function(err) {
+    console.log('GPS error:', err.code, err.message);
+  }, {
+    enableHighAccuracy: true,
+    maximumAge: 0,       // Always fresh GPS — never use cached position
+    timeout: 8000
   });
-  const nearAlerts = userRoads;
-  if (!nearAlerts.length) return;
-
-  const el = document.getElementById('guide-alerts-list');
-  el.innerHTML = nearAlerts.map(r => `
-    <div style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.45rem 0;border-bottom:1px solid rgba(244,67,54,0.1);">
-      <div style="font-size:1rem;">${r.mapIcon || '⚠️'}</div>
-      <div>
-        <div style="font-size:0.8rem;font-weight:800;color:#EF9A9A;">${r.type}</div>
-        <div style="font-size:0.78rem;font-weight:700;color:#FFFFFF;">${r.location}</div>
-        <div style="font-size:0.75rem;color:rgba(212,247,232,0.7);">${r.detail}</div>
-      </div>
-    </div>
-  `).join('');
-  document.getElementById('guide-galaxy-alerts').style.display = 'block';
-
-  if (guideVoiceEnabled && nearAlerts.length) {
-    speak(`Galaxy alert: ${nearAlerts[0].type} reported at ${nearAlerts[0].location}. Stay alert.`);
-  }
 }
-
-function clearRoute() {
-  // Release screen wake lock when navigation ends
-  releaseWakeLock();
-  if (guideRouteLine) { guideMap.removeLayer(guideRouteLine); guideRouteLine = null; }
-  document.getElementById('guide-stats-bar').style.display = 'none';
-  document.getElementById('guide-directions-box').style.display = 'none';
-  document.getElementById('guide-instruction-banner').style.display = 'none';
-  document.getElementById('guide-galaxy-alerts').style.display = 'none';
-  document.getElementById('guide-stop-btn-wrap').style.display = 'none';
-  guideSteps = [];
-  guideStepIndex = 0;
-}
-
-function stopNavigation() {
-  clearRoute();
-  if (guideWatchId) { navigator.geolocation.clearWatch(guideWatchId); guideWatchId = null; }
-  if (guideVoiceEnabled) speak('Navigation stopped. Safe travels.');
-  document.getElementById('guide-speed').textContent = '--';
-  document.getElementById('guide-eta').textContent = '--';
-  document.getElementById('guide-dist').textContent = '--';
-  document.getElementById('guide-next-turn').textContent = '--';
-}
-
-function toggleVoice() {
-  guideVoiceEnabled = !guideVoiceEnabled;
-  const btn = document.getElementById('guide-voice-btn');
-  if (guideVoiceEnabled) {
-    btn.textContent = '🔊 VOICE ON';
-    btn.style.color = '#4FC3F7';
-    btn.style.borderColor = 'rgba(79,195,247,0.3)';
-    speak('Voice navigation enabled. Celestial Guide is listening.');
-  } else {
-    btn.textContent = '🔇 VOICE OFF';
-    btn.style.color = 'rgba(212,247,232,0.3)';
-    btn.style.borderColor = 'rgba(212,247,232,0.1)';
-    window.speechSynthesis && window.speechSynthesis.cancel();
-  }
-}
-
+ 
+// ── SPEAK — immediate, no queue, no Chrome cutoff bug ──
 function speak(text) {
   if (!guideVoiceEnabled) return;
+  if (!window.speechSynthesis) return;
   
-  // Cancel anything queued — speak immediately, no waiting
   window.speechSynthesis.cancel();
   
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 0.88;
-  utter.pitch = 1.0;
-  utter.volume = 1.0;
-  
-  // Pick the clearest US English voice available
-  const voices = window.speechSynthesis.getVoices();
-  const preferred = voices.find(v =>
-    v.name.includes('Google US English') ||
-    v.name.includes('Samantha') ||
-    v.name.includes('Karen') ||
-    v.name.includes('Zira') ||
-    (v.lang === 'en-US' && !v.name.toLowerCase().includes('compact'))
-  );
-  if (preferred) utter.voice = preferred;
-  
-  // Chrome bug fix — long speech cuts off after ~15 seconds
-  utter.onstart = function() {
-    window._speakTimer = setInterval(function() {
-      if (!window.speechSynthesis.speaking) {
-        clearInterval(window._speakTimer);
-        return;
-      }
-      window.speechSynthesis.pause();
-      window.speechSynthesis.resume();
-    }, 10000);
-  };
-  utter.onend = function() { clearInterval(window._speakTimer); };
-  
-  window.speechSynthesis.speak(utter);
+  // Small delay after cancel so Chrome doesn't drop it
+  setTimeout(function() {
+    var utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 0.88;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+    
+    // Best available US voice
+    var voices = window.speechSynthesis.getVoices();
+    var preferred = voices.find(function(v) {
+      return v.name.includes('Google US English') ||
+             v.name.includes('Samantha') ||
+             v.name.includes('Karen') ||
+             v.name.includes('Zira') ||
+             (v.lang === 'en-US' && !v.name.toLowerCase().includes('compact'));
+    });
+    if (preferred) utter.voice = preferred;
+    
+    // Chrome long-speech fix
+    utter.onstart = function() {
+      window._speakTimer = setInterval(function() {
+        if (!window.speechSynthesis.speaking) {
+          clearInterval(window._speakTimer);
+          return;
+        }
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }, 10000);
+    };
+    utter.onend = function() { clearInterval(window._speakTimer); };
+    
+    window.speechSynthesis.speak(utter);
+  }, 50);
 }
 
 // Galaxy road alerts as seed with map coordinates
