@@ -5067,8 +5067,10 @@ function resetTrip() {
 // LaMilton: Replace the values below with your real keys.
 // Beta users will NOT need to enter any key themselves.
 // ══════════════════════════════════════════════════════
-const CELESTIAL_AI_KEY  = 'YOUR_ANTHROPIC_API_KEY_HERE'; // Get at console.anthropic.com
-const CELESTIAL_EIA_KEY = 'YOUR_EIA_API_KEY_HERE';       // Free at eia.gov/opendata
+const CELESTIAL_AI_KEY  = 'curl https://api.anthropic.com/v1/organizations/api_keys/$API_KEY_ID \
+    -H 'anthropic-version: 2023-06-01' \
+    -H "X-Api-Key: $ANTHROPIC_ADMIN_API_KEY"'; // Get at console.anthropic.com
+const CELESTIAL_EIA_KEY = 'gk2BPbf6CMjPdFnxj18cWpZaaCQ0YtJ4LNCojcdM';       // Free at eia.gov/opendata
 
 
 // ══ AI DISPATCH ASSISTANT ══
